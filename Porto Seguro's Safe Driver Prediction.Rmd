@@ -1,0 +1,339 @@
+---
+title: "Porto Seguro's Safe Driver Prediction"
+author: "Sushmitha K"
+date: "July 1, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+#Libaries
+
+library(data.table)
+library(dplyr)
+library(ggplot2)
+
+#Reading data
+
+train<-fread("train.csv")
+test<-fread("test.csv")
+test_raw<-fread("test.csv")
+
+```
+
+## EDA
+
+```{r}
+dim(train)
+dim(test)
+
+names(train)
+names(test)
+
+train$target=as.factor(train$target)
+
+str(train)
+
+colSums(is.na(train))
+
+colSums(is.na(test))
+```
+
+
+## checking for missing values
+- Here in this dataset -1 imples NA
+
+```{r}
+sapply(train,function(x){round(sum(x==-1)/nrow(train)*100,3)})
+
+```
+
+
+## data imputation 
+
+```{r}
+train<-train%>%select(-c(ps_car_03_cat,ps_car_05_cat))
+
+
+train[which(train$ps_reg_03==-1),"ps_reg_03"]=mean(!which(train$ps_reg_03==-1))
+
+unique(train$ps_car_11)
+
+
+train[which(train$ps_car_11==-1),"ps_car_11"]=as.numeric(names(sort(-table(train$ps_car_11))))[1]
+
+train[which(train$ps_car_12==-1),"ps_car_12"]=mean(!which(train$ps_car_12==-1))
+
+train[which(train$ps_car_14==-1),"ps_car_14"]=mean(train$ps_car_14)
+
+
+```
+
+
+
+### Sampling ##
+
+- Random sampling
+
+```{r}
+
+train_0<-train%>%filter(target==0)
+dim(train_0)
+
+train_1<-train%>%filter(target==1)
+dim(train_1)
+
+
+df_class0_under<-train_0[sample(nrow(train_1)),]
+
+dim(df_class0_under)
+
+
+final_train<-rbind(train_1,df_class0_under)
+
+final_train<-final_train%>%select(-id)
+
+table(final_train$target)
+names(final_train)
+
+str(final_train)
+dim(final_train)
+  
+```
+
+
+## XG_boosting##
+
+
+```{r}
+library(xgboost)
+library(caret)
+param_list=list(
+  booster="gbtree",
+  objective= "binary:logistic",
+  eta=0.01,
+  gamma=1,
+  max_depth=6,
+  subsample=0.8,
+  colsample_bytree=0.5
+ 
+)
+
+
+
+```
+
+
+## matrix conversion 
+```{r}
+instrain=xgb.DMatrix(data=as.matrix(final_train[,-1]),label=as.numeric(as.character(final_train$target)))
+
+dimnames(instrain)
+
+```
+
+## Crossvalidation
+-We are going to use the xgb.cv() function for cross validation
+
+```{r}
+set.seed(100)
+xgbcv=xgb.cv(params = param_list,
+             data=instrain,
+             nrounds = 1000,
+             nfold = 5,
+             print_every_n = 10,
+             early_stopping_rounds = 30,
+             maximize = F)
+
+
+
+```
+
+
+## Model training 
+
+```{r}
+xbg_model=xgb.train(data=instrain,params = param_list,nrounds = 119)
+
+
+xbg_model
+
+
+```
+
+
+## variable importance
+
+```{r}
+
+var_imp=xgb.importance(feature_names = setdiff(names(instrain),c("id","target")),model = xbg_model)
+
+xgb.plot.importance(var_imp)
+
+
+```
+
+
+
+## Prediction  on test data
+
+```{r}
+str(test)
+
+```
+
+
+## imputing missing values in test set
+
+```{r}
+sapply(test,function(x){round(sum(x==-1)/nrow(train)*100,3)})
+
+```
+
+
+```{r}
+test<-test%>%select(-c(ps_car_03_cat,ps_car_05_cat,id))
+
+dim(test)
+
+```
+
+
+## imputing missing values 
+
+
+```{r}
+
+test[which(test$ps_reg_03==-1),"ps_reg_03"]=mean(!which(test$ps_reg_03==-1))
+
+unique(test$ps_car_11)
+
+test[which(test$ps_car_11==-1),"ps_car_11"]=as.numeric(names(sort(-table(train$ps_car_11))))[1]
+
+test[which(test$ps_car_12==-1),"ps_car_12"]=mean(!which(train$ps_car_12==-1))
+
+test[which(test$ps_car_14==-1),"ps_car_14"]=mean(train$ps_car_14)
+
+
+```
+
+
+```{r}
+names(final_train)
+
+names(test)
+
+```
+
+
+```{r}
+
+
+names(final_train[,-1])%in%names(test)
+
+
+
+```
+
+## predict on test data
+```{r}
+dtest <- xgb.DMatrix(as.matrix(test))
+
+dimnames(dtest)[[2]]
+
+target<-predict(xbg_model,dtest)
+
+```
+
+
+```{r}
+
+probs<-cbind(test_raw$id,target)
+
+probs_claim<-as.data.frame.matrix(probs)
+
+colnames(probs_claim)[1]="id"
+
+probs_claim$id=as.integer(probs_claim$id)
+
+write.csv(probs_claim,"E:/Manipal/Term 2/Machine Learning/Assignments/assignment 3/ksecond.csv",row.names = F)
+
+```
+
+
+
+```{r}
+library(caret)
+train<-fread("train.csv")
+test<-fread("test.csv")
+intrain <- createDataPartition(y = train$target, p = 0.7, list = F)
+training <- train[intrain,] 
+testing <- train[-intrain,]
+dim(training);dim(testing)
+```
+
+
+### Linear regression
+```{r}
+model_lm <- lm(formula = target~., data = training)
+pred_lm = predict(model_lm, testing)
+pred_lm2 <- predict(model_lm, test)
+pred_lm2 = ifelse(pred_lm2<0,0,pred_lm2)
+final_lm = data.frame(id = test$id, target = round(pred_lm2,4))
+write.csv(final_lm, "E:/Manipal/Term 2/Machine Learning/Assignments/assignment 3/Linear_regression.csv", row.names = FALSE)
+pred_lm <- ifelse(pred_lm>0.5, 1, 0)
+mean(testing$target==pred_lm)
+```
+
+
+
+
+### Decision Tree
+```{r}
+library(rpart)
+model_dt <- rpart(formula = target~., data = training, method = "class", control = rpart.control(cp = 0))
+
+printcp(model_dt)
+cpvalue <- model_dt$cptable[which.min(model_dt$cptable[,"xerror"]),"CP"]
+
+prune_dt <- prune(model_dt, cp = cpvalue)
+plotcp(prune_dt)
+
+pred_dt <- predict(prune_dt, testing)
+
+pred_dt <- as.data.frame(pred_dt)
+pred_dt1 <- ifelse(pred_dt$`0`>pred_dt$`1`,0,1)
+pred_dt <- ifelse(pred_dt$`0`>pred_dt$`1`, pred_dt$`0`,pred_dt$`1`)
+mean(pred_dt1==testing$target)
+
+pred_dt2 <- predict(prune_dt, test)
+pred_dt2 <- as.data.frame(pred_dt2)
+pred_dt2 <- ifelse(pred_dt2$`0`>pred_dt2$`1`, pred_dt2$`0`,pred_dt2$`1`)
+
+final_dt <- data.frame(id = test$id, target = round(pred_dt2, 4))
+write.csv(final_dt, "E:/Manipal/Term 2/Machine Learning/Assignments/assignment 3/Decision_tree.csv", row.names = FALSE)
+```
+
+
+
+### Random Forest
+```{r}
+library(randomForest)
+acc = c()
+mtry = round(sqrt(length(colnames(training))-1))
+m = c(mtry-1,mtry,mtry+1,mtry+2,mtry+3)
+for (i in m) {
+  model_rf = randomForest(target~., data = training,
+                        mtry = i,
+                        ntree = 100)
+  pred_rf = round(predict(model_rf, testing))
+  acc_rf = mean(pred_rf == testing$target)
+  acc = c(acc,acc_rf)
+}
+acc
+pred_rf2 <- predict(model_rf, test)
+final_rf <- data.frame(id = test$id, target = round(pred_rf2,4))
+write.csv(final_rf,"E:/Manipal/Term 2/Machine Learning/Assignments/assignment 3/RandomForest.csv", row.names = F)
+```
+
